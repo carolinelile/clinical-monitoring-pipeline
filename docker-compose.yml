@@ -1,0 +1,94 @@
+# Day 1 infrastructure: HAPI FHIR + Kafka (KRaft) + MinIO + one-shot bucket init.
+# Start with:  docker compose up -d
+# Verify with: docker compose ps   (all services should report "healthy")
+
+services:
+  # ---- FHIR server: the data source (vitals as Observation resources) ----
+  hapi-fhir:
+    image: hapiproject/hapi:latest
+    container_name: hapi-fhir
+    ports:
+      - "8080:8080"                 # FHIR R4 REST API + web UI
+    environment:
+      hapi.fhir.fhir_version: R4
+      hapi.fhir.allow_multiple_delete: "true"
+      hapi.fhir.reuse_cached_search_results_millis: "0"
+    # NOTE: the hapiproject/hapi image is distroless (no shell, no curl/wget),
+    # so an in-container healthcheck can't run. We verify HAPI externally from
+    # the host instead:  curl http://localhost:8080/fhir/metadata  -> HTTP 200.
+    networks:
+      - clinical-net
+
+  # ---- Kafka: the streaming buffer (single broker, KRaft = no Zookeeper) ----
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    ports:
+      - "9092:9092"                 # PLAINTEXT listener for host clients
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"   # clinical-vitals topic auto-creates on first write
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - clinical-net
+
+  # ---- MinIO: S3-compatible object storage (the data lake) ----
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"                 # S3 API
+      - "9001:9001"                 # web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data            # persist objects across restarts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - clinical-net
+
+  # ---- One-shot helper: create the clinical-data bucket, then exit ----
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/clinical-data &&
+        echo 'Bucket clinical-data is ready.'
+      "
+    networks:
+      - clinical-net
+
+volumes:
+  minio-data:
+
+networks:
+  clinical-net:
+    driver: bridge
