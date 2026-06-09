@@ -1,0 +1,18 @@
+# Data & pipeline artifacts
+data/
+checkpoints/
+spark-warehouse/
+derby.log
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Secrets / local config
+.env
+
+# OS
+.DS_Store
