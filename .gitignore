@@ -16,3 +16,10 @@ venv/
 
 # OS
 .DS_Store
+
+# Others
+docs/
+README.md
+# Local tooling (Synthea JAR)
+tools/
+INTERVIEW_PREP.md
