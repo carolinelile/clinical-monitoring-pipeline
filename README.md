@@ -111,6 +111,59 @@ monitoring.
 > tested locally with docker-compose; deployed to AWS (S3 + MSK/Kinesis +
 > Glue/EMR) provisioned via Terraform with IAM/VPC and cost controls."
 
+## Phase 3 (optional) — Airflow for batch orchestration
+
+The core pipeline is **streaming** (continuous, event-driven). **Airflow is an
+orchestrator for *batch* jobs** (scheduled, sequenced) — a different problem, so it
+does **not** belong inside the live Kafka→Spark stream. Instead, Phase 3 adds
+Airflow as a separate, clearly-scoped layer that orchestrates the **batch
+side-tasks complementing the stream**:
+
+- Nightly Synthea data generation / refresh
+- Scheduled data-quality reports and validation runs
+- Parquet compaction / cleanup of old partitions
+- Daily aggregate rollups over the stored data
+- (If ML is added) periodic model retraining
+
+This mirrors a common real architecture — **streaming for the live path + Airflow
+for scheduled batch**, side by side. The point is demonstrating judgment about
+*when* to use each tool, not stacking buzzwords. Do this only after Phases 1–2 are
+solid.
+
+## Phase 4 (optional) — ML scoring & MLOps ("predict, not just detect")
+
+**Motivation (real-world):** hospitals today rely on rule-based **Early Warning
+Scores (EWS)** on vital signs — useful but "blunt instruments" that *detect* decline
+once present and cause alarm fatigue. Health systems are moving toward **ML that
+*predicts* deterioration earlier** by learning *temporal, multi-variable* patterns
+(e.g. "heart rate rising 20 BPM over 3 hours" ≠ "simply elevated"). See the UMMS /
+iHarbor article referenced in `docs/PROJECT_OVERVIEW.md`. This phase makes the
+pipeline's flagging the EWS baseline, then adds an ML layer as the upgrade.
+
+Framed as **ML *engineering* + MLOps** (the DE-relevant side), not clinical
+modeling:
+
+- **Baseline EWS first:** implement a recognized score (**NEWS2 / MEWS**) as the
+  rule-based flagging — this *is* the real-world early-warning standard.
+- **Feature engineering** over temporal windows: rolling mean/slope of HR, RR, temp
+  over the last N hours (the "trend vs. snapshot" idea). Pure, valuable DE work.
+- **Model (demonstration):** train a simple model (logistic regression / gradient
+  boosting) on those features. ⚠️ **Honesty note:** Synthea is synthetic and not
+  designed to encode real deterioration trajectories, so the model is a *demonstration
+  of the engineering*, not a clinically valid predictor — state this explicitly.
+- **In-stream scoring:** serve the model as a scoring step inside the Spark stream so
+  each reading gets a real-time risk score stored next to the rule-based flag. (The
+  impressive DE piece: real-time ML inference in a streaming pipeline.)
+- **MLOps with MLflow:** track experiments, register/version the model, and monitor
+  prediction distributions over time — echoing the article's local-validation,
+  calibration, and monitoring themes.
+
+**One-line story:** "The pipeline flags vitals with a NEWS2 early-warning score;
+Phase 4 adds an ML layer that engineers temporal features and serves a risk model
+in-stream with MLflow for tracking and monitoring — moving from rule-based detection
+toward prediction, the direction real health systems are taking." Do this only after
+Phases 1–2 are solid.
+
 ## Repo structure
 
 ```
@@ -118,7 +171,8 @@ clinical-monitoring-pipeline/
 ├── docker-compose.yml
 ├── requirements.txt
 ├── README.md
-├── CLAUDE.md                # project context for Claude Code
+├── docs/
+│   └── PROJECT_OVERVIEW.md  # beginner-friendly deep-dive (problem, tools, real-world use, job-search value)
 ├── src/
 │   ├── load_to_fhir.py      # POST Synthea bundles into HAPI
 │   ├── fhir_client.py       # paginated vital-signs retrieval from FHIR API
